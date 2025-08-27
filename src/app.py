@@ -1,9 +1,14 @@
 import os
+import sys
 import streamlit as st
-from .config import TOP_K, MIN_SCORE, FEEDBACK_CSV, CHROMA_DIR
-from .retriever import Retriever
-from .model_providers.embeddings import get_embedding_fn
-from .model_providers.chat import get_chat_fn
+
+# Add the parent directory to the path so we can import from src
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from src.config import TOP_K, MIN_SCORE, FEEDBACK_CSV, CHROMA_DIR
+from src.retriever import Retriever
+from src.model_providers.embeddings import get_embedding_fn
+from src.model_providers.chat import get_chat_fn
 import csv
 import datetime
 
