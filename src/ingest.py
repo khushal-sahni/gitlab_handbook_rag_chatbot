@@ -13,6 +13,13 @@ import traceback
 from pathlib import Path
 from memory_profiler import profile
 
+# SQLite compatibility fix for ChromaDB on deployment platforms
+try:
+    import pysqlite3
+    sys.modules['sqlite3'] = pysqlite3
+except ImportError:
+    pass
+
 # Add the project root to Python path for imports
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
