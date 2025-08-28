@@ -86,18 +86,26 @@ src/
 
 ## 🏃‍♂️ Running Locally
 
-1. **Build the vector index** (scrape + embed)
+### Option 1: Automatic Setup (Recommended)
+1. **Launch the UI directly**
+   ```bash
+   streamlit run src/app.py
+   ```
+2. **First-time setup**: The app will detect an empty database and show a setup page
+3. **Click "Start Setup"** to automatically ingest GitLab documentation (5-15 minutes)
+4. **Refresh the page** when setup completes
+
+### Option 2: Manual Setup
+1. **Build the vector index first** (scrape + embed)
    ```bash
    python -m src.ingest
    ```
-   *This will crawl GitLab's Handbook and Direction pages and create embeddings. Takes 5-15 minutes on first run.*
-
 2. **Launch the UI**
    ```bash
    streamlit run src/app.py
    ```
 
-3. **Open your browser** to `http://localhost:8501`
+**Either way, open your browser to `http://localhost:8501`**
 
 ## 🌐 Deployment
 
@@ -109,7 +117,9 @@ src/
 4. Add environment variables in the app's settings:
    - `PROVIDER=gemini`
    - `GEMINI_API_KEY=your_key_here`
-5. Deploy! First run will ingest; subsequent runs reuse the persisted `data/chroma`
+5. Deploy! 
+   - **First visit**: App shows setup page → click "Start Setup" → automatic ingestion (5-15 min)
+   - **Subsequent visits**: Instant access with persisted data in `src/data/chroma/`
 
 ### Alternative Deployment Options
 

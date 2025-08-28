@@ -35,7 +35,176 @@ st.set_page_config(
     layout="wide"
 )
 
-# Initialize components with caching
+# Auto-ingestion function
+def run_auto_ingestion():
+    """Run automatic ingestion when database is empty."""
+    import subprocess
+    import sys
+    from pathlib import Path
+    
+    # Show setup page
+    st.title("🚀 GitLab Handbook Chatbot - First Time Setup")
+    st.markdown("---")
+    
+    st.info("👋 **Welcome!** This is your first time using the chatbot. We need to build the knowledge base from GitLab's documentation.")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("**📚 What we'll do:**")
+        st.markdown("- Scrape GitLab Handbook & Direction pages")
+        st.markdown("- Process and chunk the content")
+        st.markdown("- Generate embeddings using AI")
+        st.markdown("- Build searchable knowledge base")
+    
+    with col2:
+        st.markdown("**⏱️ Expected time:**")
+        st.markdown("- ~5-15 minutes depending on network")
+        st.markdown("- ~50 pages to process")
+        st.markdown("- One-time setup only")
+        st.markdown("- Subsequent visits are instant")
+    
+    st.markdown("---")
+    
+    # Add a button to start ingestion
+    if st.button("🚀 Start Setup", type="primary", use_container_width=True):
+        try:
+            # Create progress tracking
+            progress_container = st.container()
+            
+            with progress_container:
+                st.info("🔄 **Starting ingestion pipeline...**")
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+                log_container = st.expander("📋 View Setup Logs", expanded=False)
+                
+                status_text.text("🌐 Initializing...")
+                progress_bar.progress(5)
+                
+                # Run the ingestion script
+                project_root = Path(__file__).parent.parent
+                
+                status_text.text("📥 Starting ingestion process...")
+                progress_bar.progress(10)
+                
+                # Create live log display
+                st.markdown("**📋 Live Setup Progress:**")
+                log_display = st.empty()
+                log_lines = []
+                
+                # Run ingestion with real-time output
+                import threading
+                import time
+                
+                def update_logs():
+                    """Update log display with recent lines"""
+                    if log_lines:
+                        # Show last 8 lines
+                        recent_logs = log_lines[-8:]
+                        log_text = "\n".join(recent_logs)
+                        log_display.code(log_text, language="text")
+                
+                # Start the subprocess
+                process = subprocess.Popen(
+                    [sys.executable, "-m", "src.ingest"],
+                    cwd=project_root,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    bufsize=1,
+                    universal_newlines=True
+                )
+                
+                progress_bar.progress(20)
+                status_text.text("🌐 Scraping GitLab documentation...")
+                
+                # Read output line by line in real-time
+                while True:
+                    output = process.stdout.readline()
+                    if output == '' and process.poll() is not None:
+                        break
+                    if output:
+                        # Clean up the log line
+                        clean_line = output.strip()
+                        if clean_line:
+                            log_lines.append(clean_line)
+                            update_logs()
+                            
+                            # Update progress based on log content
+                            if "pages processed" in clean_line.lower():
+                                progress_bar.progress(min(80, 20 + len(log_lines)))
+                            elif "embedding" in clean_line.lower():
+                                progress_bar.progress(min(70, 30 + len(log_lines) // 2))
+                            elif "storing" in clean_line.lower():
+                                progress_bar.progress(min(85, 40 + len(log_lines) // 3))
+                
+                # Wait for process to complete
+                return_code = process.poll()
+                
+                progress_bar.progress(90)
+                status_text.text("🔍 Finalizing setup...")
+                
+                # Final log update
+                update_logs()
+                
+                # Show full logs in expander for debugging
+                with log_container:
+                    if log_lines:
+                        st.text("Complete Setup Log:")
+                        st.code("\n".join(log_lines), language="text")
+                
+                if return_code == 0:
+                    progress_bar.progress(100)
+                    status_text.text("✅ Setup completed successfully!")
+                    
+                    st.success("🎉 **Setup Complete!**")
+                    st.balloons()
+                    
+                    st.info("🔄 **Please refresh the page** to start using the chatbot.")
+                    
+                    # Add refresh button
+                    if st.button("🔄 Refresh Page", type="primary"):
+                        st.rerun()
+                        
+                else:
+                    st.error("❌ **Setup failed!**")
+                    st.error("Please check the logs above and your API configuration.")
+                    
+                    # Show retry button
+                    if st.button("🔄 Retry Setup"):
+                        st.rerun()
+                        
+        except subprocess.TimeoutExpired:
+            st.error("⏰ **Setup timed out!** This might be due to network issues or API rate limits.")
+            if st.button("🔄 Retry Setup"):
+                st.rerun()
+        except Exception as e:
+            st.error(f"❌ **Unexpected error:** {str(e)}")
+            if st.button("🔄 Retry Setup"):
+                st.rerun()
+    
+    else:
+        st.markdown("**🔧 Configuration Check:**")
+        
+        # Show current configuration
+        config_col1, config_col2 = st.columns(2)
+        with config_col1:
+            st.markdown(f"**Provider:** `{settings.embedding_provider}`")
+            st.markdown(f"**Max Pages:** `{settings.max_pages_to_crawl}`")
+        with config_col2:
+            api_key_status = "✅ Set" if (
+                (settings.embedding_provider == "gemini" and settings.gemini_api_key) or
+                (settings.embedding_provider == "openai" and settings.openai_api_key)
+            ) else "❌ Missing"
+            st.markdown(f"**API Key:** {api_key_status}")
+            st.markdown(f"**Chunk Size:** `{settings.chunk_size}`")
+        
+        if api_key_status == "❌ Missing":
+            st.error("⚠️ **API Key Required!** Please set your API key in the environment variables before starting setup.")
+    
+    # Stop here - don't load the rest of the app
+    st.stop()
+
+# Initialize components with caching (no widgets allowed here)
 @st.cache_resource(show_spinner=False)
 def initialize_components():
     """Initialize RAG components with caching for performance."""
@@ -44,7 +213,25 @@ def initialize_components():
     document_retriever = DocumentRetriever()
     return embedding_function, chat_function, document_retriever
 
-embedding_function, chat_function, document_retriever = initialize_components()
+# Check for auto-ingestion outside cached function
+def check_database_and_setup():
+    """Check if database is empty and handle setup flow."""
+    # Initialize components first
+    embedding_function, chat_function, document_retriever = initialize_components()
+    
+    # Check if database is empty
+    collection_stats = document_retriever.get_collection_stats()
+    total_documents = collection_stats.get('total_documents', 0)
+    
+    if total_documents == 0:
+        # Show setup page and stop execution
+        run_auto_ingestion()
+        # This will call st.stop(), so execution won't continue
+    
+    return embedding_function, chat_function, document_retriever
+
+# Run the check and get components
+embedding_function, chat_function, document_retriever = check_database_and_setup()
 
 # UI Layout
 st.title("🤖 GitLab Handbook & Direction Chatbot")
