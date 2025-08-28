@@ -75,6 +75,18 @@ with st.sidebar:
     st.markdown(f"- Provider: `{settings.embedding_provider}`")
     st.markdown(f"- Top-K Results: `{settings.top_k_results}`")
     st.markdown(f"- Min Similarity: `{settings.minimum_similarity_score}`")
+    
+    st.divider()
+    
+    # Conversation context status
+    st.markdown("**Conversation**")
+    conversation_length = len(st.session_state.conversation_history)
+    if conversation_length == 0:
+        st.markdown("🆕 New conversation")
+    else:
+        st.markdown(f"💬 {conversation_length // 2} exchanges")
+        if conversation_length > 1:
+            st.markdown("✨ Context-aware mode active")
 
 # Display conversation history
 for message in st.session_state.conversation_history:
@@ -97,10 +109,39 @@ if user_question:
 
     # Generate and display assistant response
     with st.chat_message("assistant"):
-        with st.spinner("🔍 Searching documentation and generating response..."):
+        # Show different spinner message for follow-up questions
+        spinner_message = "🔍 Searching documentation and generating response..."
+        if len(st.session_state.conversation_history) > 1:
+            spinner_message = "🔍 Analyzing conversation context and searching documentation..."
+        
+        with st.spinner(spinner_message):
+            
+            # Create context-aware search query
+            search_query = user_question
+            conversation_context = ""
+            
+            # If we have conversation history, create enhanced search query for follow-up questions
+            if len(st.session_state.conversation_history) > 1:
+                # Get recent conversation context (last 2-3 exchanges)
+                recent_history = st.session_state.conversation_history[-6:]  # Last 3 Q&A pairs
+                
+                # Build conversation context for better search
+                context_parts = []
+                for msg in recent_history:
+                    if msg["role"] == "user":
+                        context_parts.append(f"Previous question: {msg['content']}")
+                    elif msg["role"] == "assistant":
+                        # Extract key entities/topics from assistant response
+                        response_preview = msg['content'][:200]  # First 200 chars
+                        context_parts.append(f"Previous answer: {response_preview}")
+                
+                conversation_context = " | ".join(context_parts[-4:])  # Last 2 Q&A pairs
+                
+                # Create enhanced search query that combines current question with context
+                search_query = f"{user_question} {conversation_context}"
             
             # Generate query embedding
-            query_embedding = embedding_function([user_question])[0]
+            query_embedding = embedding_function([search_query])[0]
             
             # Search for similar documents
             search_results = document_retriever.search_similar_documents(
@@ -122,7 +163,8 @@ if user_question:
             
             for document, metadata, similarity in zip(documents, metadata_list, similarity_scores):
                 source_url = metadata.get("url", "Unknown source")
-                document_snippet = (document[:600] + "...") if len(document) > 600 else document
+                # Use the full chunk since we already did intelligent chunking during ingestion
+                document_snippet = document
                 context_blocks.append(f"[Source: {source_url}]\n{document_snippet}")
                 source_urls.append(source_url)
             
@@ -147,9 +189,25 @@ if user_question:
             else:
                 # Generate AI response with context
                 context_text = "\n\n".join(context_blocks)
+                
+                # Build conversation-aware prompt
+                conversation_history_text = ""
+                if len(st.session_state.conversation_history) > 1:
+                    # Include recent conversation for context (excluding current question)
+                    recent_conversation = st.session_state.conversation_history[-4:-1]  # Last 2 Q&A pairs
+                    history_parts = []
+                    for msg in recent_conversation:
+                        role_label = "Human" if msg["role"] == "user" else "Assistant"
+                        history_parts.append(f"{role_label}: {msg['content']}")
+                    
+                    if history_parts:
+                        conversation_history_text = f"\n\nCONVERSATION HISTORY:\n" + "\n".join(history_parts)
+                
                 prompt = (
-                    f"SYSTEM: You are a helpful assistant that answers questions using only the provided context "
-                    f"from GitLab's documentation. If the information isn't in the context, say so clearly.\n\n"
+                    f"SYSTEM: You are a helpful assistant that answers questions using the provided context "
+                    f"from GitLab's documentation. You can reference previous conversation to understand "
+                    f"follow-up questions (like 'tell me more about her/him/it'). If the information isn't "
+                    f"in the context, say so clearly.{conversation_history_text}\n\n"
                     f"CONTEXT:\n{context_text}\n\n"
                     f"USER QUESTION: {user_question}\n\n"
                     f"ASSISTANT:"
