@@ -1,113 +1,215 @@
+"""
+GitLab RAG Chatbot - Streamlit Web Interface (Production Version)
+
+This uses the new production-grade package structure.
+Run with: streamlit run src/app.py
+"""
+
 import os
 import sys
 import streamlit as st
-
-# Add the parent directory to the path so we can import from src
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from src.config import TOP_K, MIN_SCORE, FEEDBACK_CSV, CHROMA_DIR
-from src.retriever import Retriever
-from src.model_providers.embeddings import get_embedding_fn
-from src.model_providers.chat import get_chat_fn
 import csv
 import datetime
+from pathlib import Path
 
-st.set_page_config(page_title="GitLab Handbook Chatbot", page_icon="💬", layout="wide")
+# Add the project root to Python path for imports
+project_root = Path(__file__).parent.parent
+sys.path.insert(0, str(project_root))
 
-# Ensure feedback log exists
-os.makedirs(os.path.dirname(FEEDBACK_CSV), exist_ok=True)
-if not os.path.exists(FEEDBACK_CSV):
-    with open(FEEDBACK_CSV, "w", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f)
-        writer.writerow(["timestamp", "question", "answer", "useful", "sources"])  # useful in {1,0,-1}
+# Import from new production-grade package
+from gitlab_rag_chatbot.config.settings import settings
+from gitlab_rag_chatbot.core.retrieval.vector_store import DocumentRetriever
+from gitlab_rag_chatbot.core.embeddings.providers import get_embedding_function
+from gitlab_rag_chatbot.web.feedback_collector import feedback_collector
+from gitlab_rag_chatbot.utils.logging_setup import setup_application_logging
 
-# Lazy init
+# Import chat function from migrated structure
+from src.model_providers.chat import get_chat_fn
+
+# Setup logging
+setup_application_logging(log_level="INFO")
+
+st.set_page_config(
+    page_title="GitLab Handbook Chatbot", 
+    page_icon="💬", 
+    layout="wide"
+)
+
+# Initialize components with caching
 @st.cache_resource(show_spinner=False)
-def _boot():
-    embed = get_embedding_fn()
-    chat = get_chat_fn()
-    retr = Retriever()
-    return embed, chat, retr
+def initialize_components():
+    """Initialize RAG components with caching for performance."""
+    embedding_function = get_embedding_function()
+    chat_function = get_chat_fn()
+    document_retriever = DocumentRetriever()
+    return embedding_function, chat_function, document_retriever
 
-embed, chat, retr = _boot()
+embedding_function, chat_function, document_retriever = initialize_components()
 
-st.title("GitLab Handbook & Direction Chatbot")
-st.caption("Answers strictly from https://about.gitlab.com/handbook/ and /direction/. Sources cited.")
+# UI Layout
+st.title("🤖 GitLab Handbook & Direction Chatbot")
+st.caption("Production-grade RAG system for GitLab documentation with semantic search and AI responses.")
 
-if "history" not in st.session_state:
-    st.session_state.history = []  # list of {role, content}
+# Initialize chat history
+if "conversation_history" not in st.session_state:
+    st.session_state.conversation_history = []
 
+# Sidebar with information
 with st.sidebar:
-    st.header("About")
-    st.markdown("This is a weekend-built RAG bot for GitLab's public docs.")
-    st.markdown("**Scope**: Handbook & Direction. If unsure, it will say so.")
+    st.header("📊 System Information")
+    st.markdown("**Architecture**: Production-grade RAG pipeline")
+    st.markdown("**Scope**: GitLab Handbook & Direction docs")
+    st.markdown("**Features**: Semantic search, source citations, user feedback")
+    
     st.divider()
-    st.markdown(f"Vector store: `{CHROMA_DIR}`")
+    
+    # Display system stats
+    collection_stats = document_retriever.get_collection_stats()
+    st.markdown(f"**Documents**: {collection_stats.get('total_documents', 0):,}")
+    st.markdown(f"**Vector Store**: `{settings.vector_store_directory}`")
+    
+    st.divider()
+    
+    # Configuration display
+    st.markdown("**Configuration**")
+    st.markdown(f"- Provider: `{settings.embedding_provider}`")
+    st.markdown(f"- Top-K Results: `{settings.top_k_results}`")
+    st.markdown(f"- Min Similarity: `{settings.minimum_similarity_score}`")
 
-for m in st.session_state.history:
-    with st.chat_message(m["role"]):
-        st.markdown(m["content"])
+# Display conversation history
+for message in st.session_state.conversation_history:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
 
-q = st.chat_input("Ask about GitLab's Handbook/Direction…")
-if q:
-    st.session_state.history.append({"role": "user", "content": q})
+# Chat input
+user_question = st.chat_input("Ask about GitLab's Handbook or Direction...")
+
+if user_question:
+    # Add user message to history
+    st.session_state.conversation_history.append({
+        "role": "user", 
+        "content": user_question
+    })
+    
+    # Display user message
     with st.chat_message("user"):
-        st.markdown(q)
+        st.markdown(user_question)
 
+    # Generate and display assistant response
     with st.chat_message("assistant"):
-        with st.spinner("Thinking…"):
-            # Embed query and retrieve
-            q_emb = embed([q])[0]
-            res = retr.query(q_emb, top_k=TOP_K)
-
-            docs = res.get("documents", [[]])[0]
-            metas = res.get("metadatas", [[]])[0]
-            dists = res.get("distances", [[]])[0]
-
-            # Convert Chroma distance to a pseudo-similarity (depends on backend). Normalize gently.
-            # If Chroma returns cosine distance, similarity ~ 1 - dist.
-            sims = [1 - (d or 0) for d in dists]
-
+        with st.spinner("🔍 Searching documentation and generating response..."):
+            
+            # Generate query embedding
+            query_embedding = embedding_function([user_question])[0]
+            
+            # Search for similar documents
+            search_results = document_retriever.search_similar_documents(
+                query_embedding=query_embedding,
+                max_results=settings.top_k_results
+            )
+            
+            # Extract results
+            documents = search_results.get("documents", [[]])[0]
+            metadata_list = search_results.get("metadatas", [[]])[0]
+            distances = search_results.get("distances", [[]])[0]
+            
+            # Convert distances to similarity scores (1 - distance)
+            similarity_scores = [1 - (distance or 0) for distance in distances]
+            
+            # Prepare context and sources
             context_blocks = []
-            sources = []
-            for doc, meta, sim in zip(docs, metas, sims):
-                url = meta.get("url", "")
-                snippet = (doc[:300] + "…") if len(doc) > 300 else doc
-                context_blocks.append(f"[source] {url}\n{snippet}")
-                sources.append(url)
-
-            # Guardrail: if everything below threshold, ask user to rephrase and show best matches
-            if not sims or max(sims) < MIN_SCORE:
-                msg = (
-                    "I couldn't confidently find this in GitLab's Handbook/Direction. "
-                    "Try rephrasing, or browse the sources below.\n\n" + "\n".join(f"- {u}" for u in sources)
+            source_urls = []
+            
+            for document, metadata, similarity in zip(documents, metadata_list, similarity_scores):
+                source_url = metadata.get("url", "Unknown source")
+                document_snippet = (document[:600] + "...") if len(document) > 600 else document
+                context_blocks.append(f"[Source: {source_url}]\n{document_snippet}")
+                source_urls.append(source_url)
+            
+            # Check if we have confident results
+            max_similarity = max(similarity_scores) if similarity_scores else 0
+            
+            if max_similarity < settings.minimum_similarity_score:
+                # Low confidence response
+                response_message = (
+                    "🤔 I couldn't find confident information about this in GitLab's documentation. "
+                    "Try rephrasing your question or check these potentially related sources:\n\n"
                 )
-                st.markdown(msg)
-                st.session_state.history.append({"role": "assistant", "content": msg})
+                for i, url in enumerate(source_urls[:3], 1):
+                    response_message += f"{i}. {url}\n"
+                
+                st.markdown(response_message)
+                st.session_state.conversation_history.append({
+                    "role": "assistant", 
+                    "content": response_message
+                })
+                
             else:
-                context = "\n\n".join(context_blocks)
+                # Generate AI response with context
+                context_text = "\n\n".join(context_blocks)
                 prompt = (
-                    f"SYSTEM: You answer using only the context. If unknown, say so.\n\n"
-                    f"CONTEXT:\n{context}\n\n"
-                    f"USER: {q}\nASSISTANT:"
+                    f"SYSTEM: You are a helpful assistant that answers questions using only the provided context "
+                    f"from GitLab's documentation. If the information isn't in the context, say so clearly.\n\n"
+                    f"CONTEXT:\n{context_text}\n\n"
+                    f"USER QUESTION: {user_question}\n\n"
+                    f"ASSISTANT:"
                 )
-                answer = chat([{"role": "user", "content": prompt}], temperature=0.2)
+                
+                ai_response = chat_function([{"role": "user", "content": prompt}], temperature=0.2)
+                
+                # Display response
+                st.markdown(ai_response)
+                
+                # Display sources
+                with st.expander("📚 Sources & Similarity Scores"):
+                    for i, (url, similarity) in enumerate(zip(source_urls, similarity_scores), 1):
+                        confidence_emoji = "🟢" if similarity > 0.85 else "🟡" if similarity > 0.75 else "🔴"
+                        st.markdown(f"{confidence_emoji} **{i}.** [{url}]({url}) — Similarity: {similarity:.3f}")
+                
+                # Add to conversation history
+                st.session_state.conversation_history.append({
+                    "role": "assistant", 
+                    "content": ai_response
+                })
+                
+                # Feedback collection UI
+                st.divider()
+                feedback_col1, feedback_col2, feedback_col3 = st.columns([1, 1, 4])
+                
+                with feedback_col1:
+                    if st.button("👍 Helpful", key=f"helpful_{len(st.session_state.conversation_history)}"):
+                        feedback_collector.record_feedback(
+                            user_question=user_question,
+                            chatbot_response=ai_response,
+                            feedback_rating="helpful",
+                            source_urls=source_urls,
+                            similarity_scores=similarity_scores
+                        )
+                        st.toast("✅ Thank you for your feedback!")
+                
+                with feedback_col2:
+                    if st.button("👎 Not helpful", key=f"not_helpful_{len(st.session_state.conversation_history)}"):
+                        feedback_collector.record_feedback(
+                            user_question=user_question,
+                            chatbot_response=ai_response,
+                            feedback_rating="not_helpful",
+                            source_urls=source_urls,
+                            similarity_scores=similarity_scores
+                        )
+                        st.toast("📝 Feedback logged. We'll work on improving!")
 
-                # Render answer and sources
-                st.markdown(answer)
-                with st.expander("Sources"):
-                    for i, (u, s) in enumerate(zip(sources, sims), start=1):
-                        st.markdown(f"**{i}.** {u} — similarity ~ {s:.2f}")
-
-                st.session_state.history.append({"role": "assistant", "content": answer})
-
-                # Feedback UI
-                c1, c2, c3 = st.columns([1,1,6])
-                if c1.button("👍 Helpful", key=f"up_{len(st.session_state.history)}"):
-                    with open(FEEDBACK_CSV, "a", newline="", encoding="utf-8") as f:
-                        csv.writer(f).writerow([datetime.datetime.utcnow().isoformat(), q, answer, 1, ";".join(sources)])
-                    st.toast("Thanks for the feedback!")
-                if c2.button("👎 Not helpful", key=f"down_{len(st.session_state.history)}"):
-                    with open(FEEDBACK_CSV, "a", newline="", encoding="utf-8") as f:
-                        csv.writer(f).writerow([datetime.datetime.utcnow().isoformat(), q, answer, 0, ";".join(sources)])
-                    st.toast("Logged. We'll improve retrieval.")
+# Footer with system information
+st.divider()
+with st.container():
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.caption("🏗️ **Architecture**: Production-grade RAG")
+    
+    with col2:
+        st.caption(f"🤖 **Provider**: {settings.embedding_provider.title()}")
+    
+    with col3:
+        feedback_stats = feedback_collector.get_feedback_statistics()
+        total_feedback = feedback_stats.get("total_feedback", 0)
+        st.caption(f"📊 **Feedback**: {total_feedback} responses collected")
